@@ -11,6 +11,7 @@ import functools
 import voluptuous as vol
 
 from ... import common
+from .. import stats
 from .base import ActorBase
 
 
@@ -186,15 +187,83 @@ CONFIG_SCHEMA = vol.Schema({
 }, extra=True)
 
 
+class TempDeltaParameter(stats.MinAvgMaxParameter):
+    """The difference between """
+
+    name = "temp_delta"
+    config_schema = vol.Schema({
+        vol.Optional("off_value", default=0): vol.Any(float, int, None),
+        vol.Optional("factors", default=dict): vol.All(
+            lambda v: v or {},
+            {vol.Extra: vol.All(
+                vol.Any(float, int), vol.Range(min=0, min_included=False),
+            )},
+        ),
+        vol.Optional("weights", default=dict): vol.All(
+            lambda v: v or {},
+            {vol.Extra: vol.All(vol.Any(float, int), vol.Range(min=0))},
+        ),
+    }, extra=True)
+
+    def collect(self) -> T.Iterable[stats.WeightedValue]:
+        """Collects the difference between target and current temperature
+        for all thermostats."""
+
+        off_value = self.cfg["off_value"]
+        values = []
+        for room in self.rooms:
+            for therm in filter(lambda a: a.is_initialized, room.actors):
+                assert isinstance(therm, ThermostatActor)
+                weight = self.cfg["weights"].get(therm.entity_id, 1)
+                if weight == 0:
+                    # ignore this thermostat
+                    continue
+
+                if therm.current_temp is None or \
+                   therm.current_value is None or \
+                   therm.current_temp.is_off or \
+                   therm.current_value.is_off:
+                    if off_value is None:
+                        # thermostats that are off should be excluded
+                        continue
+                    temp_delta = float(off_value)
+                else:
+                    temp_delta = float(therm.current_value -
+                                       therm.current_temp)
+                    factor = self.cfg["factors"].get(therm.entity_id, 1)
+                    temp_delta *= factor
+                value = stats.WeightedValue(temp_delta, weight)
+                self.log("Value for {} in {} is {}".format(therm, room, value),
+                         level="DEBUG")
+                values.append(value)
+
+        return values
+
+    def initialize(self) -> None:
+        """Listens for changes of current and target temperature."""
+
+        super().initialize()
+
+        handler = lambda *a, **kw: self.update_stats()
+        for room in self.rooms:
+            for therm in room.actors:
+                self.log("Listening for temperature changes of {} in {}."
+                         .format(therm, room),
+                         level="DEBUG")
+                therm.events.on("current_temp_changed", handler)
+                therm.events.on("value_changed", handler)
+
+
 class ThermostatActor(ActorBase):
     """A thermostat to be controlled by Schedy."""
 
     name = "thermostat"
     config_schema = CONFIG_SCHEMA
+    stats_param_types = [TempDeltaParameter]
 
     def __init__(self, *args: T.Any, **kwargs: T.Any) -> None:
         super().__init__(*args, **kwargs)
-        self.current_temp = None  # type: T.Optional[Temp]
+        self._current_temp = None  # type: T.Optional[Temp]
 
     def check_config_plausibility(self, state: dict) -> None:
         """Is called during initialization to warn the user about some
@@ -255,6 +324,12 @@ class ThermostatActor(ActorBase):
                          "Please check your config!"
                          .format(opmode, allowed_opmodes),
                          level="WARNING")
+
+    @property
+    def current_temp(self) -> T.Optional[Temp]:
+        """Returns the current temperature as measured by the thermostat."""
+
+        return self._current_temp
 
     @staticmethod
     def deserialize_value(value: str) -> Temp:
@@ -372,8 +447,8 @@ class ThermostatActor(ActorBase):
                 self.log("Invalid current temperature, not updating it.",
                          level="ERROR")
             else:
-                if current_temp != self.current_temp:
-                    self.current_temp = current_temp
+                if current_temp != self._current_temp:
+                    self._current_temp = current_temp
                     self.events.trigger(
                         "current_temp_changed", self, current_temp
                     )

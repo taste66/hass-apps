@@ -51,7 +51,7 @@ def config_post_hook(cfg: dict) -> dict:
 
     actor_type = cfg["actor_type"]
 
-    # Build room objects.
+    # Build Room objects.
     rooms = []
     for room_name, room_data in cfg["rooms"].items():
         actors = {}
@@ -92,6 +92,36 @@ def config_post_hook(cfg: dict) -> dict:
     del cfg["rooms"], cfg["schedule_prepend"], cfg["schedule_append"]
     cfg["_app"].actor_type = actor_type
     cfg["_app"].rooms = rooms
+
+    # Build StatisticalParameter objects.
+    stats_params = []
+    param_types = {t.name: t for t in actor_type.stats_param_types}
+    for param_name, param_data in cfg["statistics"].items():
+        try:
+            param_type = param_types[param_data["type"]]
+        except KeyError:
+            raise ValueError(
+                "statistical parameter {} is not available for this actor type"
+                .format(param_data["type"])
+            )
+
+        param_data = param_type.config_schema(param_data)
+        param = param_type(param_name, param_data, cfg["_app"])
+        stats_params.append(param)
+
+        # add rooms associated with the parameter
+        for room_name in param_data["rooms"]:
+            for room in rooms:
+                if room.name == room_name:
+                    param.rooms.append(room)
+                    break
+            else:
+                raise ValueError(
+                    "Room {} for statistical parameter {} not found."
+                    .format(repr(room_name), repr(param_name))
+                )
+
+    cfg["_app"].stats_params = stats_params
 
     return cfg
 
@@ -228,6 +258,29 @@ ROOM_SCHEMA = vol.Schema(vol.All(
 ))
 
 
+########## STATISTICS
+
+STATISTICAL_PARAMETER_ROOM_SCHEMA = vol.Schema(vol.All(
+    lambda v: v or {},
+    {
+        # no settings yet
+    },
+))
+
+STATISTICAL_PARAMETER_SCHEMA = vol.Schema(vol.All(
+    lambda v: v or {},
+    {
+        "friendly_name": str,
+        vol.Required("type"): str,
+        vol.Optional("rooms", default=dict): vol.All(
+            lambda v: v or {},
+            {vol.Extra: STATISTICAL_PARAMETER_ROOM_SCHEMA},
+        ),
+        vol.Optional("config", default=dict): DICTS_IN_DICT_SCHEMA,
+    },
+))
+
+
 ########## MAIN CONFIG SCHEMA
 
 CONFIG_SCHEMA = vol.Schema(vol.All(
@@ -257,6 +310,10 @@ CONFIG_SCHEMA = vol.Schema(vol.All(
         vol.Optional("rooms", default=dict): vol.All(
             lambda v: v or {},
             {vol.Extra: ROOM_SCHEMA},
+        ),
+        vol.Optional("statistics", default=dict): vol.All(
+            lambda v: v or {},
+            {vol.Extra: STATISTICAL_PARAMETER_SCHEMA},
         ),
     }, extra=True),
     config_post_hook,

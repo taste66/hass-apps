@@ -6,6 +6,7 @@ import typing as T
 if T.TYPE_CHECKING:
     # pylint: disable=cyclic-import,unused-import
     import uuid
+    from ..stats import StatisticalParameter
 
 import copy
 import json
@@ -21,6 +22,7 @@ class ActorBase:
 
     name = "actor"
     config_schema = vol.Schema(object)
+    stats_param_types = []  # type: T.List[T.Type[StatisticalParameter]]
 
     def __init__(self, entity_id: str, cfg: dict, room: "Room") -> None:
         self.entity_id = entity_id
@@ -32,6 +34,7 @@ class ActorBase:
 
         self._current_value = None  # type: T.Any
         self._wanted_value = None  # type: T.Any
+
         self._resending_timer = None  # type: T.Optional[uuid.UUID]
 
     def __repr__(self) -> str:
@@ -119,6 +122,12 @@ class ActorBase:
         state attributes dictionary is provided."""
 
         pass
+
+    @property
+    def current_value(self) -> T.Any:
+        """Returns the value currently set at this actor."""
+
+        return self._current_value
 
     @staticmethod
     def deserialize_value(value: str) -> T.Any:
@@ -259,3 +268,9 @@ class ActorBase:
         This implementation does a comparison with ==."""
 
         return bool(a == b)
+
+    @property
+    def wanted_value(self) -> T.Any:
+        """Returns the value currently wanted for this actor."""
+
+        return self._wanted_value

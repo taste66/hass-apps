@@ -260,12 +260,14 @@ class Room:
         }
 
         unchanged = (state, attrs) == self._last_state
-        self.log("{} HA state: state={}, attributes={}"
-                 .format("Unchanged" if unchanged else "Sending new",
-                         repr(state), attrs),
-                 level="DEBUG")
         if unchanged:
+            self.log("Unchanged HA state: state={}, attributes={}"
+                     .format(repr(state), attrs),
+                     level="DEBUG")
             return
+        self.log("Sending new HA state: state={}, attributes={}"
+                 .format(repr(state), attrs),
+                 level="DEBUG", prefix=common.LOG_PREFIX_OUTGOING)
 
         entity_id = "schedy.{}_{}".format(self.app.name, self.name)
         self.app.set_state(entity_id, state=state, attributes=attrs)
